@@ -18,7 +18,7 @@
 ## 安装
 
 ```bash
-go get github.com/openclaw/weibo-go
+go get github.com/dtapps/weibo-go
 ```
 
 ## 快速开始
@@ -31,7 +31,7 @@ package main
 import (
     "fmt"
     "log"
-    weibo "github.com/openclaw/weibo-go"
+    weibo "github.com/dtapps/weibo-go"
 )
 
 func main() {
