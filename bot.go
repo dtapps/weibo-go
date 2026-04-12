@@ -276,7 +276,7 @@ func (s *OutboundStream) splitByNewline(text string) []string {
 	var lines []string
 	var current strings.Builder
 
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if current.Len()+len(line) > s.textChunkLimit {
 			if current.Len() > 0 {
 				lines = append(lines, current.String())
