@@ -22,7 +22,7 @@ func NewClient() *Client {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		log: logger.New("http.client"),
+		log: logger.New("http"),
 	}
 }
 

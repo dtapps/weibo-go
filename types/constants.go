@@ -5,10 +5,10 @@ import "time"
 const (
 	// 默认的 API 端点
 	DefaultWSEndpoint        = "ws://open-im.api.weibo.com/ws/stream"
-	DefaultTokenEndpoint     = "http://open-im.api.weibo.com/open/auth/ws_token"
-	DefaultHotSearchEndpoint = "http://open-im.api.weibo.com/open/weibo/hot_search"
-	DefaultSearchEndpoint    = "http://open-im.api.weibo.com/open/wis/search_query"
-	DefaultStatusEndpoint    = "http://open-im.api.weibo.com/open/weibo/user_status"
+	DefaultTokenEndpoint     = "https://open-im.api.weibo.com/open/auth/ws_token"
+	DefaultHotSearchEndpoint = "https://open-im.api.weibo.com/open/weibo/hot_search"
+	DefaultSearchEndpoint    = "https://open-im.api.weibo.com/open/wis/search_query"
+	DefaultStatusEndpoint    = "https://open-im.api.weibo.com/open/weibo/user_status"
 
 	// PingInterval 心跳间隔
 	PingInterval = 30 * time.Second

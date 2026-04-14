@@ -43,12 +43,14 @@ type TokenManager struct {
 	mu         sync.RWMutex
 	cache      *types.TokenCache
 	httpClient *http.Client
+	log        *logger.Logger
 }
 
 // NewTokenManager 创建 Token 管理器
 func NewTokenManager() *TokenManager {
 	return &TokenManager{
 		httpClient: http.NewClient(),
+		log:        logger.New("token"),
 	}
 }
 
@@ -106,6 +108,7 @@ func (tm *TokenManager) FetchToken(appId string, appSecret string, tokenEndpoint
 				continue
 			}
 
+			tm.log.Error("获取微博 token 失败", logger.F("err", err))
 			return nil, fmt.Errorf("获取微博 token 失败: %w", err)
 		}
 
@@ -116,6 +119,8 @@ func (tm *TokenManager) FetchToken(appId string, appSecret string, tokenEndpoint
 				time.Sleep(delay)
 				continue
 			}
+
+			tm.log.Error("获取微博 token 失败: 响应中缺少 token")
 			return nil, lastErr
 		}
 
@@ -161,6 +166,8 @@ func (tm *TokenManager) ClearCache() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	tm.cache = nil
+
+	tm.log.Warn("已清除缓存的 Token")
 }
 
 // ResolveAccount 解析账号配置

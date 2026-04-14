@@ -18,7 +18,7 @@ type API struct {
 func NewAPI() *API {
 	return &API{
 		client: NewClient(),
-		log:    logger.New("http.api"),
+		log:    logger.New("api"),
 	}
 }
 
