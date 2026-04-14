@@ -530,7 +530,7 @@ func (c *WsClient) sendHeartbeat() {
 
 func parseDelays(delays string) []time.Duration {
 	var result []time.Duration
-	for _, d := range strings.Split(delays, ",") {
+	for d := range strings.SplitSeq(delays, ",") {
 		d = strings.TrimSpace(d)
 		if d == "" {
 			continue

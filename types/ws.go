@@ -23,7 +23,7 @@ type WsMessageMsg struct {
 		Text       string                  `json:"text,omitempty"`       // 消息内容
 		ToUserId   string                  `json:"toUserId,omitempty"`   // 接收用户ID
 		TimeStamp  int64                   `json:"timeStamp,omitempty"`  // 时间戳
-	} `json:"payload,omitempty"`
+	} `json:"payload"`
 }
 
 type WsMessageMsgInputItem struct {
@@ -38,7 +38,7 @@ type WsMessageMsgInputItem struct {
 		Source   struct {
 			Data      string `json:"data,omitempty"`       // 数据
 			MediaType string `json:"media_type,omitempty"` // 媒体类型
-		} `json:"source,omitempty"` // 来源
+		} `json:"source"` // 来源
 	} `json:"content,omitempty"` // 内容
 }
 
@@ -56,7 +56,7 @@ type SendMessageRequest struct {
 		MessageId string `json:"messageId,omitempty"` // 消息ID
 		ChunkId   int    `json:"chunkId,omitempty"`   // 分块ID
 		Done      bool   `json:"done,omitempty"`      // 是否完成
-	} `json:"payload,omitempty"`
+	} `json:"payload"`
 }
 
 // SendMessagePayload 发送消息请求负载

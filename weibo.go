@@ -68,10 +68,7 @@ func (c *Client) SendMessageChunked(to string, text string, chunkLimit int) ([]*
 
 	var results []*types.SendResult
 	for i := 0; i < length; i += chunkLimit {
-		end := i + chunkLimit
-		if end > length {
-			end = length
-		}
+		end := min(i+chunkLimit, length)
 		chunk := string(runes[i:end])
 		result, err := c.plugin.SendMessage(to, chunk)
 		if err != nil {
