@@ -1,4 +1,4 @@
-package weibo
+package http
 
 import (
 	"bytes"
@@ -8,24 +8,25 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/dtapps/weibo-go/logger"
 )
 
-// HTTPClient HTTP 客户端
-type HTTPClient struct {
+type Client struct {
 	client *http.Client
+	log    *logger.Logger
 }
 
-// NewHTTPClient 创建 HTTP 客户端
-func NewHTTPClient() *HTTPClient {
-	return &HTTPClient{
+func NewClient() *Client {
+	return &Client{
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		log: logger.New("http.client"),
 	}
 }
 
-// GetJSON 发送 GET 请求并解析 JSON 响应
-func (c *HTTPClient) GetJSON(url string, result any) error {
+func (c *Client) GetJSON(url string, result any) error {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -40,15 +41,20 @@ func (c *HTTPClient) GetJSON(url string, result any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("请求失败: %d %s - %s", resp.StatusCode, resp.Status, string(body))
+		respBody, _ := io.ReadAll(resp.Body)
+		c.log.Error("请求失败",
+			logger.F("url", url),
+			logger.F("status_code", resp.StatusCode),
+			logger.F("status_text", resp.Status),
+			logger.F("body", string(respBody)),
+		)
+		return fmt.Errorf("请求失败: %d %s - %s", resp.StatusCode, resp.Status, string(respBody))
 	}
 
 	return json.NewDecoder(resp.Body).Decode(result)
 }
 
-// PostJSON 发送 POST 请求并解析 JSON 响应
-func (c *HTTPClient) PostJSON(url string, body any, result any) error {
+func (c *Client) PostJSON(url string, body any, result any) error {
 	jsonData, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -69,13 +75,18 @@ func (c *HTTPClient) PostJSON(url string, body any, result any) error {
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		c.log.Error("请求失败",
+			logger.F("url", url),
+			logger.F("status_code", resp.StatusCode),
+			logger.F("status_text", resp.Status),
+			logger.F("body", string(respBody)),
+		)
 		return fmt.Errorf("请求失败: %d %s - %s", resp.StatusCode, resp.Status, string(respBody))
 	}
 
 	return json.NewDecoder(resp.Body).Decode(result)
 }
 
-// AddQueryParams 添加查询参数到 URL
 func AddQueryParams(baseURL string, params map[string]any) string {
 	u, err := url.Parse(baseURL)
 	if err != nil {

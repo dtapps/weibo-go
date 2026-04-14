@@ -1,9 +1,9 @@
-package weibo
+package types
 
 import "time"
 
 const (
-	// DefaultEndpoints 默认的 API 端点
+	// 默认的 API 端点
 	DefaultWSEndpoint        = "ws://open-im.api.weibo.com/ws/stream"
 	DefaultTokenEndpoint     = "http://open-im.api.weibo.com/open/auth/ws_token"
 	DefaultHotSearchEndpoint = "http://open-im.api.weibo.com/open/weibo/hot_search"
