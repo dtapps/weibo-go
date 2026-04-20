@@ -4,66 +4,105 @@
 
 参考 [微博私信通道插件](https://github.com/wecode-ai/openclaw-weibo) 实现
 
-## 功能特性
-
-- WebSocket 实时消息收发
-- 自动心跳保活和重连
-
 ## 安装
 
 ```bash
 go get github.com/dtapps/weibo-go
 ```
 
-## 快速开始
+## 获取凭证
+
+1. 打开微博客户端，私信 **@微博龙虾助手**
+2. 发送消息：`连接龙虾`
+3. 收到回复示例：
+
+```
+您的应用凭证信息如下：
+
+AppId: your-app-id
+AppSecret: your-app-secret
+```
+
+如需重置凭证，发送 `重置凭证`
+
+## 使用 Demo
 
 ```go
 package main
 
 import (
-	"log"
+	"encoding/json"
+	"fmt"
+	"time"
 
 	weibo "github.com/dtapps/weibo-go"
+	"github.com/dtapps/weibo-go/config"
 	"github.com/dtapps/weibo-go/logger"
 	"github.com/dtapps/weibo-go/types"
 )
 
 func main() {
-
 	// 日志
 	logger.SetLevel(logger.LevelDebug)
-	l := logger.GetLogger("test")
+	l := logger.GetLogger("demo")
 
 	// 创建配置
-	cfg := &types.Config{
-		Weibo: &types.WeiboConfig{
-			AppId:     "your-app-id",
-			AppSecret: "your-app-secret",
-		},
-	}
+	defaultCfg := config.DefaultConfig()
+	defaultCfg.AppID = "your-app-id"
+	defaultCfg.AppSecret = "your-app-secret"
 
 	// 创建客户端
-	client, err := weibo.NewClient("default", cfg)
+	client, err := weibo.NewClient("default", &types.Config{
+		Weibo: defaultCfg,
+	})
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	defer client.Stop()
 
 	// 设置消息处理
-	client.OnMessage(func(msg *types.WsMessageMsg) {
-		l.Info("收到消息",
-			logger.F("FromUserId", msg.Payload.FromUserId),
-			logger.F("Text", msg.Payload.Text),
+	client.OnMessage(func(msg *types.InboundMessage) {
+		fmt.Println("----------------")
+		jsonMsg, _ := json.MarshalIndent(msg, "", "  ")
+		fmt.Println(string(jsonMsg))
+		fmt.Println("----------------")
+
+		content := ""
+		for _, segment := range msg.Content {
+			content += segment.Text
+		}
+
+		// 自动回复
+		reply := fmt.Sprintf("收到: %s", content)
+		messageID, err := client.SendMessage(&types.OutboundMessage{
+			ToUserID: msg.SenderID,
+			Text:     reply,
+		})
+		if err != nil {
+			l.Error("发送消息失败", logger.F("error", err.Error()))
+		}
+		l.Info("已回复", logger.F("reply", reply), logger.F("messageID", messageID))
+	})
+
+	// 设置连接状态
+	client.OnConnected(func() {
+		l.Info("已连接到微博服务器")
+
+		// 列出所有成员
+		members := client.GetMember().ListUsers(&types.MemberListUsersRequest{})
+		l.Info("列出所有成员", logger.F("members", members))
+
+		// 获取缓存的Token
+		token := client.GetTokenManager().GetCachedToken()
+		l.Info("获取缓存的Token",
+			logger.F("token", token.Token),
+			logger.F("acquiredAt", time.Unix(token.AcquiredAt, 0).Format(time.DateTime)),
+			logger.F("expiresAt", time.Unix(token.ExpiresAt, 0).Format(time.DateTime)),
 		)
 	})
 
-	// 连接状态
-	client.OnConnected(func() {
-		l.Info("已连接")
-	})
-
 	client.OnDisconnected(func() {
-		l.Info("已断开")
+		l.Info("已断开连接")
 	})
 
 	l.Info("正在连接...")
@@ -76,45 +115,10 @@ func main() {
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
-| AppId | 是 | 应用ID |
+| AppID | 是 | 应用ID |
 | AppSecret | 是 | 应用密钥 |
-| WSEndpoint | 否 | WebSocket 地址 |
-| TokenEndpoint | 否 | Token 地址 |
-
-## API
-
-```go
-// 创建客户端
-client, err := weibo.NewClient("default", cfg)
-
-// 设置消息处理
-client.OnMessage(func(msg *types.WsMessageMsg) {})
-
-// 连接成功
-client.OnConnected(func() {})
-
-// 连接断开
-client.OnDisconnected(func() {})
-
-// 发送消息
-client.SendMessage(toUserId, "你好")
-
-// 获取状态
-client.GetState()
-
-// 停止客户端
-client.Stop()
-```
-
-## 日志
-
-```go
-logger.SetLevel(logger.LevelDebug)
-l := logger.GetLogger("test")
-
-l.Info("信息", logger.F("key", "value"))
-l.Error("错误", logger.F("error", err.Error()))
-```
+| TokenEndpoint | 否 | Token 端点 |
+| WSEndpoint | 否 | WebSocket 端点 |
 
 ## License
 
