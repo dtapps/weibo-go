@@ -13,6 +13,7 @@ func DefaultConfig() *types.WeiboConfig {
 	}
 }
 
+// boolPtr 返回布尔指针
 func boolPtr(b bool) *bool {
 	return &b
 }

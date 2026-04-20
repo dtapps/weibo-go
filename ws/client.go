@@ -2,7 +2,7 @@ package ws
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -12,20 +12,8 @@ import (
 
 	"github.com/dtapps/weibo-go/logger"
 	"github.com/dtapps/weibo-go/types"
+	"github.com/dtapps/weibo-go/utils"
 	"github.com/gorilla/websocket"
-)
-
-const (
-	// 默认心跳间隔(秒)
-	DefaultHeartbeatInterval = 30
-	// 默认心跳超时次数阈值
-	HeartbeatTimeoutThreshold = 2
-	// 默认发送超时(毫秒)
-	DefaultSendTimeoutMs = 30000
-	// 默认最大重连次数
-	DefaultMaxReconnectAttempts = 100
-	// 默认重连延迟
-	DefaultReconnectDelays = "1s,2s,5s,10s,30s,60s"
 )
 
 // WsClientCallback WebSocket客户端回调接口
@@ -36,7 +24,20 @@ type WsClientCallback interface {
 	OnError(err error)
 	OnClose(code int, reason string)
 	OnKickout(code int, reason string)
-	OnAuthFailed(code int) (*types.WsAuth, error)
+	OnAuthFailed(code int) (*types.WsAuthData, error)
+}
+
+// defaultDialer 全局默认 WebSocket Dialer
+var defaultDialer = &websocket.Dialer{
+	Proxy:            http.ProxyFromEnvironment,
+	HandshakeTimeout: 45 * time.Second,
+}
+
+// SetDefaultDialer 设置全局默认 WebSocket Dialer
+func SetDefaultDialer(dialer *websocket.Dialer) {
+	if dialer != nil {
+		defaultDialer = dialer
+	}
 }
 
 type WsClient struct {
@@ -44,17 +45,16 @@ type WsClient struct {
 	conn      *websocket.Conn
 	url       string
 	state     string
-	auth      *types.WsAuth
-	accountId string
-	botId     string
+	auth      *types.WsAuthData
+	accountID string
 
 	// 心跳相关
-	heartbeatInterval     int         // 心跳间隔(秒)
-	heartbeatTimer        *time.Timer // 心跳定时器
-	heartbeatAckReceived  bool        // 是否收到心跳确认
-	lastHeartbeatAt       int64       // 上次心跳时间
-	heartbeatTimeoutCount int         // 心跳超时次数
-	heartbeatCount        int         // 心跳次数
+	heartbeatInterval     time.Duration // 心跳间隔(秒)
+	heartbeatTimer        *time.Timer   // 心跳定时器
+	heartbeatAckReceived  bool          // 是否收到心跳确认
+	lastHeartbeatAt       int64         // 上次心跳时间
+	heartbeatTimeoutCount int           // 心跳超时次数
+	heartbeatCount        int           // 心跳次数
 
 	// 重连相关
 	reconnectAttempts    int
@@ -62,49 +62,30 @@ type WsClient struct {
 	reconnectDelays      []time.Duration
 	reconnectTimer       *time.Timer
 
-	// 待响应的请求
-	pendingRequests map[string]*PendingRequest
-
 	// 回调
 	callback WsClientCallback
 
 	// 日志
 	log *logger.Logger
 
-	// 序列号
-	seqNo uint32
-
 	// 上下文
 	ctx    context.Context
 	cancel context.CancelFunc
 
 	// 连接ID
-	connectId string
-}
-
-// PendingRequest 待响应的请求
-type PendingRequest struct {
-	resolveCh chan any
-	timeout   time.Duration
-	decoder   func(data []byte, msgId string) any
-	Resolve   func(any)
-	Reject    func(error)
-	Timer     *time.Timer
-	Decoder   func([]byte, string) any
+	connectID string
 }
 
 // NewWsClient 创建WebSocket客户端
-func NewWsClient(url string, accountId string, botId string, callback WsClientCallback) *WsClient {
+func NewWsClient(url string, accountID string, callback WsClientCallback) *WsClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &WsClient{
 		url:                  url,
-		accountId:            accountId,
-		botId:                botId,
-		state:                "disconnected",
-		heartbeatInterval:    DefaultHeartbeatInterval,
-		maxReconnectAttempts: DefaultMaxReconnectAttempts,
-		reconnectDelays:      parseDelays(DefaultReconnectDelays),
-		pendingRequests:      make(map[string]*PendingRequest),
+		accountID:            accountID,
+		state:                types.ConnectionStateDisconnected.String(),
+		heartbeatInterval:    types.DefaultHeartbeatInterval,
+		maxReconnectAttempts: types.DefaultMaxReconnectAttempts,
+		reconnectDelays:      utils.ParseDelays(types.DefaultReconnectDelays),
 		callback:             callback,
 		log:                  logger.New("ws"),
 		ctx:                  ctx,
@@ -113,7 +94,7 @@ func NewWsClient(url string, accountId string, botId string, callback WsClientCa
 }
 
 // SetAuth 设置认证信息
-func (c *WsClient) SetAuth(auth *types.WsAuth) {
+func (c *WsClient) SetAuth(auth *types.WsAuthData) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.auth = auth
@@ -124,14 +105,14 @@ func (c *WsClient) SetReconnectConfig(maxAttempts int, delays string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.maxReconnectAttempts = maxAttempts
-	c.reconnectDelays = parseDelays(delays)
+	c.reconnectDelays = utils.ParseDelays(delays)
 }
 
 // Connect 连接
 func (c *WsClient) Connect() error {
 	c.mu.Lock()
-	if c.state == "disconnected" {
-		c.state = "connecting"
+	if c.state == types.ConnectionStateDisconnected.String() {
+		c.state = types.ConnectionStateConnecting.String()
 	}
 	c.mu.Unlock()
 
@@ -148,38 +129,31 @@ func (c *WsClient) doConnect() error {
 	url := c.url
 	if auth != nil && auth.Token != "" {
 		url = fmt.Sprintf("%s?app_id=%s&token=%s&version=%s",
-			c.url, auth.UID, auth.Token, "1.0.0")
+			c.url, auth.AppID, auth.Token, auth.Version)
 	}
 
-	c.log.Info("正在连接WebSocket", logger.F("url", url))
+	c.log.Info("正在连接", logger.FS("url", url))
 
 	// 创建WebSocket连接
 	header := http.Header{}
 	header.Set("Origin", c.url)
 
-	conn, resp, err := websocket.DefaultDialer.Dial(url, header)
+	conn, resp, err := defaultDialer.Dial(url, header)
 	if err != nil {
-		c.log.Error("WebSocket连接失败", logger.F("error", err.Error()))
-		c.scheduleReconnect()
+		c.log.Error("连接失败", logger.F("error", err.Error()))
+		c.ScheduleReconnect()
 		return err
 	}
 
 	if resp != nil {
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			c.log.Error("关闭响应体失败", logger.F("error", err.Error()))
+		}
 	}
 
 	c.mu.Lock()
 	c.conn = conn
 	c.mu.Unlock()
-
-	// 设置处理器
-	conn.SetCloseHandler(func(code int, text string) error {
-		c.handleClose(code, text)
-		return nil
-	})
-
-	// 启动心跳定时器
-	c.startHeartbeat()
 
 	// 启动读取协程
 	go c.readLoop()
@@ -189,9 +163,12 @@ func (c *WsClient) doConnect() error {
 
 // readLoop 读取循环
 func (c *WsClient) readLoop() {
+	closeHandled := false
 	defer func() {
-		// 连接断开时触发重连
-		c.handleClose(1006, "read loop exit")
+		if !closeHandled {
+			// 正常关闭连接
+			c.handleClose(1006, "read loop exit")
+		}
 	}()
 
 	for {
@@ -210,16 +187,24 @@ func (c *WsClient) readLoop() {
 
 			_, data, err := conn.ReadMessage()
 			if err != nil {
-				// 忽略 "use of closed" 错误，这是正常关闭
+				if closeErr, ok := err.(*websocket.CloseError); ok {
+					closeHandled = true
+					c.handleClose(closeErr.Code, closeErr.Text)
+					return
+				}
+				// 忽略 "use of closed" 错误，这是正常关闭连接
 				if !strings.Contains(err.Error(), "use of closed") {
 					c.log.Error("读取消息失败", logger.F("error", err.Error()))
 				}
 				return
 			}
 
+			// HEX 只打印前 64 字节
+			limit := min(len(data), 64)
 			c.log.Debug("收到原始消息",
 				logger.F("length", len(data)),
 				logger.F("data", string(data)),
+				logger.F("hex", hex.EncodeToString(data[:limit])),
 			)
 
 			c.handleMessage(data)
@@ -227,103 +212,14 @@ func (c *WsClient) readLoop() {
 	}
 }
 
-// handleMessage 处理消息
-func (c *WsClient) handleMessage(data []byte) {
+// ScheduleReconnect 安排重连
+func (c *WsClient) ScheduleReconnect() {
 	c.mu.Lock()
-	c.heartbeatAckReceived = true
-	c.heartbeatTimeoutCount = 0
-	c.mu.Unlock()
-
-	text := string(data)
-
-	// 提前 处理 pong 响应
-	if text == "pong" || text == `{"type":"pong"}` {
-		c.lastHeartbeatAt = time.Now().UnixMilli()
-		return
-	}
-
-	var msg types.WsMsg
-	if err := json.Unmarshal(data, &msg); err != nil {
-		c.log.Error("解析消息失败", logger.F("error", err.Error()))
-		return
-	}
-
-	msgType := msg.Type
-	c.log.Debug("收到消息", logger.F("msgType", msgType))
-
-	switch msgType {
-	case "connected":
-		// 连接成功
-		c.handlePushConnected(data)
-	case "message":
-		// 消息
-		c.handlePushMessage(data)
-	default:
-		c.log.Debug("未处理的msgType", logger.F("msgType", msgType))
-	}
-}
-
-// handleConnected 处理推送连接成功
-func (c *WsClient) handlePushConnected(data []byte) {
-
-	var msg types.WsConnectedMsg
-	if err := json.Unmarshal(data, &msg); err != nil {
-		c.log.Error("解析消息失败", logger.F("error", err.Error()))
-		return
-	}
-
-	c.mu.Lock()
-	c.connectId = msg.ConnectionID
-	c.state = "connected"
-	c.mu.Unlock()
-
-	// 回调
-	if c.callback != nil {
-		result := &types.OnReadyData{
-			ConnectID: c.connectId,
-			Timestamp: time.Now().Unix(),
-		}
-		c.callback.OnReady(result)
-		c.callback.OnStateChange("connected")
-	}
-}
-
-// handlePushMessage 处理推送消息
-func (c *WsClient) handlePushMessage(data []byte) {
-	c.log.Debug("收到推送消息", logger.F("data", string(data)))
-
-	var msg types.WsMessageMsg
-	if err := json.Unmarshal(data, &msg); err != nil {
-		c.log.Error("解析消息失败", logger.F("error", err.Error()))
-		return
-	}
-
-	if c.callback != nil {
-		c.callback.OnDispatch(&msg)
-	}
-}
-
-// startHeartbeat 启动心跳
-func (c *WsClient) startHeartbeat() {
-	c.stopHeartbeat()
-
-	c.mu.Lock()
-	interval := time.Duration(c.heartbeatInterval) * time.Second
-	c.mu.Unlock()
-
-	c.heartbeatTimer = time.AfterFunc(interval, func() {
-		c.sendHeartbeat()
-	})
-}
-
-// scheduleReconnect 安排重连
-func (c *WsClient) scheduleReconnect() {
-	c.mu.Lock()
-	if c.state == "reconnecting" {
+	if c.state == types.ConnectionStateConnecting.String() {
 		c.mu.Unlock()
 		return
 	}
-	c.state = "reconnecting"
+	c.state = types.ConnectionStateConnecting.String()
 	c.mu.Unlock()
 
 	c.stopHeartbeat()
@@ -332,25 +228,10 @@ func (c *WsClient) scheduleReconnect() {
 	c.reconnectAttempts++
 	if c.maxReconnectAttempts > 0 && c.reconnectAttempts > c.maxReconnectAttempts {
 		c.log.Error("达到最大重连次数", logger.F("attempts", c.reconnectAttempts))
-		c.state = "disconnected"
+		c.state = types.ConnectionStateDisconnected.String()
 		c.mu.Unlock()
 		return
 	}
-
-	delay := c.getReconnectDelay()
-	c.mu.Unlock()
-
-	c.log.Info("计划重连", logger.F("delay", delay), logger.F("attempts", c.reconnectAttempts))
-
-	c.reconnectTimer = time.AfterFunc(delay, func() {
-		c.doConnect()
-	})
-}
-
-// getReconnectDelay 获取重连延迟
-func (c *WsClient) getReconnectDelay() time.Duration {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 
 	idx := c.reconnectAttempts - 1
 	if idx >= len(c.reconnectDelays) {
@@ -359,10 +240,19 @@ func (c *WsClient) getReconnectDelay() time.Duration {
 	if idx < 0 {
 		idx = 0
 	}
+	delay := c.reconnectDelays[idx] + time.Duration(rand.Intn(1000))*time.Millisecond
 
-	delay := c.reconnectDelays[idx]
-	jitter := time.Duration(rand.Intn(1000)) * time.Millisecond
-	return delay + jitter
+	c.log.Info("计划重连",
+		logger.F("delay", delay),
+		logger.F("attempts", c.reconnectAttempts),
+	)
+
+	c.reconnectTimer = time.AfterFunc(delay, func() {
+		if err := c.doConnect(); err != nil {
+			c.log.Error("重连失败", logger.F("error", err.Error()))
+		}
+	})
+	c.mu.Unlock()
 }
 
 // close 关闭连接
@@ -371,62 +261,25 @@ func (c *WsClient) close() {
 	defer c.mu.Unlock()
 
 	if c.conn != nil {
-		c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			c.log.Error("关闭连接失败", logger.F("error", err.Error()))
+		}
 		c.conn = nil
 	}
 
 	c.stopHeartbeatLocked()
 
+	// 停止并置空重连定时器
 	if c.reconnectTimer != nil {
 		c.reconnectTimer.Stop()
 		c.reconnectTimer = nil
 	}
 }
 
-// handleClose 处理关闭
-func (c *WsClient) handleClose(code int, reason string) {
-	c.log.Info("WebSocket关闭", logger.F("code", code), logger.F("reason", reason))
-
-	c.mu.Lock()
-	wasConnected := c.state == "connected"
-	c.mu.Unlock()
-
-	c.stopHeartbeat()
-
-	c.close()
-
-	c.mu.Lock()
-	c.state = "disconnected"
-	c.mu.Unlock()
-
-	if c.callback != nil {
-		c.callback.OnClose(code, reason)
-	}
-
-	if wasConnected || code != 1000 {
-		c.scheduleReconnect()
-	}
-}
-
-// stopHeartbeatLocked 内部心跳停止逻辑 (加锁)
-func (c *WsClient) stopHeartbeatLocked() {
-	if c.heartbeatTimer != nil {
-		c.heartbeatTimer.Stop()
-		c.heartbeatTimer = nil
-	}
-}
-
-// stopHeartbeat 对外暴露的心跳停止方法 (加锁)
-func (c *WsClient) stopHeartbeat() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.stopHeartbeatLocked()
-}
-
 // Disconnect 断开连接
 func (c *WsClient) Disconnect() error {
 	c.mu.Lock()
-	c.state = "disconnected"
+	c.state = types.ConnectionStateDisconnected.String()
 	c.mu.Unlock()
 
 	c.cancel()
@@ -442,105 +295,9 @@ func (c *WsClient) GetState() string {
 	return c.state
 }
 
-// GetConnectId 获取连接ID
-func (c *WsClient) GetConnectId() string {
+// GetConnectID 获取连接ID
+func (c *WsClient) GetConnectID() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.connectId
-}
-
-func (c *WsClient) SendMessage(toUserId, text, messageId string, chunkId int, done bool) error {
-	c.mu.RLock()
-	conn := c.conn
-	c.mu.RUnlock()
-
-	if conn == nil {
-		return fmt.Errorf("连接未建立")
-	}
-
-	msg := types.SendMessageRequest{
-		Type: "send_message",
-		Payload: types.SendMessagePayload{
-			ToUserId:  toUserId,
-			Text:      text,
-			MessageId: messageId,
-			ChunkId:   chunkId,
-			Done:      done,
-		},
-	}
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("序列化消息失败: %w", err)
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		return fmt.Errorf("发送消息失败: %w", err)
-	}
-
-	return nil
-}
-
-// sendHeartbeat 发送心跳
-func (c *WsClient) sendHeartbeat() {
-	c.mu.RLock()
-	conn := c.conn
-	c.mu.RUnlock()
-
-	if conn == nil {
-		return
-	}
-
-	c.log.Debug("准备发送心跳",
-		logger.F("interval", c.heartbeatInterval),
-		logger.F("lastAt", time.UnixMilli(c.lastHeartbeatAt).Format(time.DateTime)),
-		logger.F("count", c.heartbeatTimeoutCount),
-		logger.F("total", c.heartbeatCount),
-	)
-
-	now := time.Now().UnixMilli()
-	c.mu.Lock()
-	if now-c.lastHeartbeatAt > int64(c.heartbeatInterval*1000+c.heartbeatInterval*1000) {
-		c.heartbeatTimeoutCount++
-	}
-	c.lastHeartbeatAt = now
-	c.heartbeatCount++
-	c.mu.Unlock()
-
-	data, err := json.Marshal(types.HeartbeatMsgRequest{
-		Type: "ping",
-	})
-	if err != nil {
-		c.log.Error("序列化心跳失败", logger.F("error", err.Error()))
-		return
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		c.log.Error("发送心跳失败", logger.F("error", err.Error()))
-	}
-
-	c.log.Debug("发送心跳成功", logger.F("data", string(data)))
-
-	c.mu.Lock()
-	interval := time.Duration(c.heartbeatInterval) * time.Second
-	c.mu.Unlock()
-
-	c.heartbeatTimer = time.AfterFunc(interval, func() {
-		c.sendHeartbeat()
-	})
-}
-
-func parseDelays(delays string) []time.Duration {
-	var result []time.Duration
-	for d := range strings.SplitSeq(delays, ",") {
-		d = strings.TrimSpace(d)
-		if d == "" {
-			continue
-		}
-		var t time.Duration
-		fmt.Sscanf(d, "%d", &t)
-		result = append(result, t*time.Second)
-	}
-	if len(result) == 0 {
-		result = []time.Duration{1 * time.Second}
-	}
-	return result
+	return c.connectID
 }

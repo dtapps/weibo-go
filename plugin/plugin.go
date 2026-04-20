@@ -2,36 +2,45 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/dtapps/weibo-go/account"
 	"github.com/dtapps/weibo-go/logger"
 	"github.com/dtapps/weibo-go/member"
+	"github.com/dtapps/weibo-go/message"
+	"github.com/dtapps/weibo-go/token"
 	"github.com/dtapps/weibo-go/types"
 	"github.com/dtapps/weibo-go/ws"
 )
 
-// Plugin 微博插件
+// Plugin 插件
 type Plugin struct {
-	name         string
-	version      string
-	accountId    string
-	account      *types.ResolvedAccount
-	cfg          *types.Config
-	client       *ws.WsClient
-	runtime      *Runtime
-	log          *logger.Logger
-	ctx          context.Context
-	cancel       context.CancelFunc
-	tokenManager *account.TokenManager
+	name      string
+	version   string
+	accountID string
+	account   *types.Account
+	cfg       *types.Config
+	client    *ws.WsClient
+	runtime   *Runtime
+
+	// 日志
+	log *logger.Logger
+
+	// 上下文
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// Token 刷新相关
+	tokenRefreshTimer *time.Timer
+	mu                sync.Mutex
 }
 
 // Runtime 运行时
 type Runtime struct {
 	channel        *ChannelRuntime
-	onMessage      func(msg *types.WsMessageMsg)
+	onMessage      func(msg *types.InboundMessage)
 	onConnected    func()
 	onDisconnected func()
 }
@@ -43,13 +52,13 @@ type ChannelRuntime struct {
 }
 
 // NewPlugin 创建插件
-func New(accountId string, acc *types.ResolvedAccount, cfg *types.Config) *Plugin {
+func NewPlugin(accountID string, acc *types.Account, cfg *types.Config) *Plugin {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Plugin{
 		name:      "weibo",
-		version:   "1.0.0",
-		accountId: accountId,
+		version:   types.Version,
+		accountID: accountID,
 		account:   acc,
 		cfg:       cfg,
 		log:       logger.New("plugin"),
@@ -60,19 +69,20 @@ func New(accountId string, acc *types.ResolvedAccount, cfg *types.Config) *Plugi
 
 // Start 启动插件
 func (p *Plugin) Start() error {
-	p.log.Info("启动微博插件", logger.F("accountId", p.accountId))
+	p.log.Info("启动插件", logger.F("accountID", p.accountID))
 	p.log.Info("配置信息",
-		logger.F("appId", maskString(p.account.AppId)),
-		logger.F("appSecret", maskString(p.account.AppSecret)),
-		logger.F("wsEndpoint", p.account.WsGatewayUrl),
+		logger.F("appID", p.account.AppID),
+		logger.FS("appSecret", p.account.AppSecret),
+		logger.F("tokenEndpoint", p.account.TokenEndpoint),
+		logger.F("wsEndpoint", p.account.WSEndpoint),
 	)
 
-	// 创建Token管理器
-	p.tokenManager = account.NewTokenManager()
+	// 获取 Token 管理器
+	tokenMgr := token.GetManager(p.accountID)
 
-	// 获取Token
-	token, err := p.tokenManager.GetValidToken(
-		p.account.AppId,
+	// 获取新的 Token
+	tokenData, err := tokenMgr.FetchToken(
+		p.account.AppID,
 		p.account.AppSecret,
 		p.account.TokenEndpoint,
 	)
@@ -81,17 +91,27 @@ func (p *Plugin) Start() error {
 	}
 
 	// 创建WS客户端
-	p.client = ws.NewWsClient(p.account.WsGatewayUrl, p.account.AccountID, p.account.BotId, p)
+	p.client = ws.NewWsClient(
+		p.account.WSEndpoint,
+		p.accountID,
+		p,
+	)
 
 	// 设置认证信息
-	p.client.SetAuth(&types.WsAuth{
-		BizID: "weibo",
-		UID:   p.account.BotId,
-		Token: token,
+	p.client.SetAuth(&types.WsAuthData{
+		AppID:   p.account.AppID,
+		Token:   tokenData.Token,
+		Version: types.Version,
 	})
 
 	// 设置重连配置
-	p.client.SetReconnectConfig(0, "1s,2s,5s,10s,30s,60s")
+	p.client.SetReconnectConfig(
+		p.account.WsMaxReconnectAttempts,
+		types.DefaultReconnectDelays,
+	)
+
+	// 启动 Token 刷新定时器
+	p.startTokenRefreshTimer()
 
 	// 启动客户端
 	return p.client.Connect()
@@ -99,16 +119,27 @@ func (p *Plugin) Start() error {
 
 // Stop 停止插件
 func (p *Plugin) Stop() error {
-	p.log.Info("停止微博插件", logger.F("accountId", p.accountId))
+	p.log.Info("停止插件", logger.F("accountID", p.accountID))
 
 	p.cancel()
 
-	// 移除成员管理
-	member.RemoveMember(p.accountId)
+	// 停止 Token 刷新定时器
+	p.mu.Lock()
+	if p.tokenRefreshTimer != nil {
+		p.tokenRefreshTimer.Stop()
+		p.tokenRefreshTimer = nil
+	}
+	p.mu.Unlock()
+
+	// 清空成员管理
+	memberMgr := member.GetManager(p.accountID)
+	memberMgr.Clear()
 
 	// 断开WS连接
 	if p.client != nil {
-		p.client.Disconnect()
+		if err := p.client.Disconnect(); err != nil {
+			p.log.Error("断开连接失败", logger.F("error", err.Error()))
+		}
 	}
 
 	return nil
@@ -116,20 +147,20 @@ func (p *Plugin) Stop() error {
 
 // GetAccountId 获取账号ID
 func (p *Plugin) GetAccountId() string {
-	return p.accountId
+	return p.accountID
 }
 
 // GetState 获取状态
 func (p *Plugin) GetState() string {
 	if p.client == nil {
-		return "disconnected"
+		return types.ConnectionStateDisconnected.String()
 	}
 	return p.client.GetState()
 }
 
 // OnReady 连接就绪
 func (p *Plugin) OnReady(data *types.OnReadyData) {
-	p.log.Info("WebSocket连接就绪", logger.F("ConnectID", data.ConnectID))
+	p.log.Debug("连接就绪", logger.F("ConnectID", data.ConnectID))
 
 	if p.runtime != nil && p.runtime.onConnected != nil {
 		p.runtime.onConnected()
@@ -138,31 +169,48 @@ func (p *Plugin) OnReady(data *types.OnReadyData) {
 
 // OnDispatch 消息推送
 func (p *Plugin) OnDispatch(msg *types.WsMessageMsg) {
-	p.log.Debug("收到推送", logger.F("msgId", msg.Payload.MessageId))
+	p.log.Debug("消息推送", logger.F("MessageID", msg.Payload.MessageID))
+
+	// 转换为 InboundMessage
+	inbound := message.ToInboundMessage(msg)
+
+	// 设置账号ID
+	inbound.AccountID = p.account.AccountID
+
+	// 设置应用ID
+	inbound.AppID = p.account.AppID
+
+	// 增加成员
+	memberMgr := member.GetManager(p.accountID)
+	if _, err := memberMgr.AddUser(&types.MemberAddUserRequest{
+		UserID: inbound.SenderID,
+	}); err != nil {
+		p.log.Error("添加成员失败", logger.F("error", err.Error()))
+	}
 
 	// 调用消息处理回调
 	if p.runtime != nil && p.runtime.onMessage != nil {
-		p.runtime.onMessage(msg)
+		p.runtime.onMessage(inbound)
 	}
 }
 
 // OnStateChange 状态变化
 func (p *Plugin) OnStateChange(state string) {
-	p.log.Info("WebSocket状态变化", logger.F("state", state))
+	p.log.Warn("状态变化", logger.F("state", state))
 
-	if state == "disconnected" && p.runtime != nil && p.runtime.onDisconnected != nil {
+	if state == types.ConnectionStateDisconnected.String() && p.runtime != nil && p.runtime.onDisconnected != nil {
 		p.runtime.onDisconnected()
 	}
 }
 
 // OnError 错误
 func (p *Plugin) OnError(err error) {
-	p.log.Error("WebSocket错误", logger.F("error", err.Error()))
+	p.log.Error("错误", logger.F("error", err.Error()))
 }
 
 // OnClose 关闭
 func (p *Plugin) OnClose(code int, reason string) {
-	p.log.Info("WebSocket关闭",
+	p.log.Warn("关闭",
 		logger.F("code", code),
 		logger.F("reason", reason),
 	)
@@ -170,58 +218,42 @@ func (p *Plugin) OnClose(code int, reason string) {
 
 // OnKickout 被踢
 func (p *Plugin) OnKickout(code int, reason string) {
-	p.log.Warn("被踢下线",
+	p.log.Warn("被踢",
 		logger.F("code", code),
 		logger.F("reason", reason),
 	)
 }
 
 // OnAuthFailed 认证失败
-func (p *Plugin) OnAuthFailed(code int) (*types.WsAuth, error) {
-	p.log.Warn("认证失败，尝试刷新Token", logger.F("code", code))
+func (p *Plugin) OnAuthFailed(code int) (*types.WsAuthData, error) {
+	p.log.Warn("认证失败", logger.F("code", code))
 	return nil, nil
 }
 
 // SendMessage 发送消息
-func (p *Plugin) SendMessage(to string, text string) (*types.SendResult, error) {
-	if p.client == nil || p.client.GetState() != "connected" {
-		p.log.Warn("发送消息失败：未连接")
-		return &types.SendResult{
-			Ok:    false,
-			Error: fmt.Errorf("not connected"),
-		}, nil
+func (p *Plugin) SendMessage(msg *types.OutboundMessage) (string, error) {
+	if p.client == nil || p.client.GetState() != types.ConnectionStateConnected.String() {
+		err := errors.New("not connected")
+		p.log.Error("发送消息", logger.F("error", err.Error()))
+		return "", err
 	}
 
-	// 解析目标
-	targetId := parseTarget(to)
+	// 生成消息ID
+	messageID := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	err := p.client.SendMessage(msg.ToUserID, msg.Text, messageID, 0, true)
+	if err != nil {
+		p.log.Error("发送消息", logger.F("error", err.Error()))
+		return messageID, err
+	}
 
 	p.log.Debug("发送消息",
-		logger.F("target", targetId),
-		logger.F("text", text),
+		logger.F("messageID", messageID),
+		logger.F("toUserID", msg.ToUserID),
+		logger.F("content", msg.Text),
 	)
 
-	messageId := fmt.Sprintf("msg_%d", time.Now().UnixNano())
-
-	err := p.client.SendMessage(targetId, text, messageId, 0, true)
-	if err != nil {
-		p.log.Error("发送消息失败", logger.F("error", err.Error()))
-		return &types.SendResult{
-			Ok:        false,
-			MessageID: messageId,
-			Error:     err,
-		}, nil
-	}
-
-	return &types.SendResult{Ok: true, MessageID: messageId}, nil
-}
-
-// parseTarget 解析目标
-func parseTarget(to string) string {
-	toUserId := to
-	if len(toUserId) > 5 && toUserId[:5] == "user:" {
-		toUserId = toUserId[5:]
-	}
-	return toUserId
+	return messageID, nil
 }
 
 // SetRuntime 设置运行时
@@ -230,7 +262,7 @@ func (p *Plugin) SetRuntime(runtime *Runtime) {
 }
 
 // SetOnMessage 设置消息处理回调
-func (p *Plugin) SetOnMessage(fn func(msg *types.WsMessageMsg)) {
+func (p *Plugin) SetOnMessage(fn func(msg *types.InboundMessage)) {
 	if p.runtime == nil {
 		p.runtime = &Runtime{}
 	}
@@ -254,13 +286,13 @@ func (p *Plugin) SetOnDisconnected(fn func()) {
 }
 
 // GetMember 获取成员管理
-func (p *Plugin) GetMember() member.MemberInterface {
-	return member.NewManager()
+func (p *Plugin) GetMember() *member.Manager {
+	return member.GetManager(p.accountID)
 }
 
 // GetTokenManager 获取 Token 管理器
-func (p *Plugin) GetTokenManager() *account.TokenManager {
-	return p.tokenManager
+func (p *Plugin) GetTokenManager() *token.Manager {
+	return token.GetManager(p.accountID)
 }
 
 // PluginManager 插件管理器
@@ -279,40 +311,42 @@ func NewPluginManager() *PluginManager {
 }
 
 // CreatePlugin 创建插件
-func (m *PluginManager) CreatePlugin(accountId string, account *types.ResolvedAccount, cfg *types.Config) *Plugin {
+func (m *PluginManager) CreatePlugin(accountID string, account *types.Account, cfg *types.Config) *Plugin {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// 停止已有插件
-	if existing, ok := m.plugins[accountId]; ok {
-		existing.Stop()
+	if existing, ok := m.plugins[accountID]; ok {
+		if err := existing.Stop(); err != nil {
+			m.log.Error("停止插件失败", logger.F("error", err.Error()))
+		}
 	}
 
-	plugin := New(accountId, account, cfg)
-	m.plugins[accountId] = plugin
+	plugin := NewPlugin(accountID, account, cfg)
+	m.plugins[accountID] = plugin
 
 	return plugin
 }
 
 // GetPlugin 获取插件
-func (m *PluginManager) GetPlugin(accountId string) *Plugin {
+func (m *PluginManager) GetPlugin(accountID string) *Plugin {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.plugins[accountId]
+	return m.plugins[accountID]
 }
 
 // StopPlugin 停止插件
-func (m *PluginManager) StopPlugin(accountId string) error {
+func (m *PluginManager) StopPlugin(accountID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	plugin, ok := m.plugins[accountId]
+	plugin, ok := m.plugins[accountID]
 	if !ok {
 		return nil
 	}
 
 	err := plugin.Stop()
-	delete(m.plugins, accountId)
+	delete(m.plugins, accountID)
 	return err
 }
 
@@ -322,31 +356,18 @@ func (m *PluginManager) StopAll() error {
 	defer m.mu.Unlock()
 
 	for _, plugin := range m.plugins {
-		plugin.Stop()
+		if err := plugin.Stop(); err != nil {
+			m.log.Error("停止插件失败", logger.F("error", err.Error()))
+		}
 	}
 
 	m.plugins = make(map[string]*Plugin)
 	return nil
 }
 
-// 全局插件管理器
-var (
-	globalPluginManager *PluginManager
-	pluginManagerOnce   sync.Once
-)
-
-// GetPluginManager 获取全局插件管理器
-func GetPluginManager() *PluginManager {
-	pluginManagerOnce.Do(func() {
-		globalPluginManager = NewPluginManager()
-	})
-	return globalPluginManager
-}
-
 // CreateAndStart 创建并启动插件
-func CreateAndStart(accountId string, account *types.ResolvedAccount, cfg *types.Config) (*Plugin, error) {
-	manager := GetPluginManager()
-	plugin := manager.CreatePlugin(accountId, account, cfg)
+func CreateAndStart(manager *PluginManager, accountID string, account *types.Account, cfg *types.Config) (*Plugin, error) {
+	plugin := manager.CreatePlugin(accountID, account, cfg)
 
 	if err := plugin.Start(); err != nil {
 		return nil, err
@@ -356,37 +377,73 @@ func CreateAndStart(accountId string, account *types.ResolvedAccount, cfg *types
 }
 
 // StopAndRemove 停止并移除插件
-func StopAndRemove(accountId string) error {
-	return GetPluginManager().StopPlugin(accountId)
+func StopAndRemove(manager *PluginManager, accountID string) error {
+	return manager.StopPlugin(accountID)
 }
 
 // GetPluginByAccountId 根据账号ID获取插件
-func GetPluginByAccountId(accountId string) *Plugin {
-	return GetPluginManager().GetPlugin(accountId)
+func GetPluginByAccountId(manager *PluginManager, accountID string) *Plugin {
+	return manager.GetPlugin(accountID)
 }
 
-// RunWithContext 运行直到上下文取消
-func RunWithContext(ctx context.Context, accountId string, account *types.ResolvedAccount, cfg *types.Config) error {
-	plugin, err := CreateAndStart(accountId, account, cfg)
-	if err != nil {
-		return err
+// startTokenRefreshTimer 启动 Token 刷新定时器
+func (p *Plugin) startTokenRefreshTimer() {
+
+	// Token 刷新检查间隔
+	checkInterval := types.TokenRefreshCheckInterval
+
+	// Token 刷新阈值（提前多久刷新）
+	refreshThreshold := types.TokenRefreshThreshold
+
+	var checkFunc func()
+	checkFunc = func() {
+		select {
+		case <-p.ctx.Done():
+			return
+		default:
+		}
+
+		// 获取 Token 管理器
+		tokenMgr := token.GetManager(p.accountID)
+
+		// 检查 Token 是否即将过期
+		if tokenMgr.IsTokenExpiringSoon(refreshThreshold) {
+
+			// 获取新的 Token
+			newToken, err := tokenMgr.FetchToken(
+				p.account.AppID,
+				p.account.AppSecret,
+				p.account.TokenEndpoint,
+			)
+			if err != nil {
+				p.log.Error("刷新 Token 失败", logger.F("error", err.Error()))
+			} else {
+
+				// 更新 WebSocket 客户端的认证信息
+				if p.client != nil {
+					p.client.SetAuth(&types.WsAuthData{
+						AppID:   p.account.AppID,
+						Token:   newToken.Token,
+						Version: types.Version,
+					})
+
+					// 安排重连
+					// p.client.ScheduleReconnect()
+				}
+			}
+		}
+
+		// 安排下一次检查
+		p.mu.Lock()
+		if p.tokenRefreshTimer != nil {
+			p.tokenRefreshTimer.Stop()
+		}
+		p.tokenRefreshTimer = time.AfterFunc(checkInterval, checkFunc)
+		p.mu.Unlock()
 	}
 
-	// 设置消息处理
-	plugin.SetOnMessage(func(msg *types.WsMessageMsg) {
-		// TODO: 处理消息逻辑
-	})
-
-	// 运行直到取消
-	<-ctx.Done()
-
-	return plugin.Stop()
-}
-
-// maskString 遮蔽字符串
-func maskString(s string) string {
-	if len(s) <= 6 {
-		return "***"
-	}
-	return s[:3] + "..." + s[len(s)-3:]
+	// 首次检查
+	p.mu.Lock()
+	p.tokenRefreshTimer = time.AfterFunc(checkInterval, checkFunc)
+	p.mu.Unlock()
 }

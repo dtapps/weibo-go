@@ -1,15 +1,16 @@
-package http
+package api
 
 import (
 	"fmt"
 
+	"github.com/dtapps/weibo-go/http"
 	"github.com/dtapps/weibo-go/logger"
 	"github.com/dtapps/weibo-go/types"
 )
 
 // API
 type API struct {
-	client *Client
+	client *http.Client
 	log    *logger.Logger
 	token  string
 }
@@ -17,7 +18,7 @@ type API struct {
 // NewAPI 创建API实例
 func NewAPI() *API {
 	return &API{
-		client: NewClient(),
+		client: http.NewClient(),
 		log:    logger.New("api"),
 	}
 }
@@ -47,7 +48,7 @@ func (a *API) GetHotSearch(params *types.HotSearchRequest) (*types.HotSearchResp
 		queryParams["token"] = a.token
 	}
 	if len(queryParams) > 0 {
-		url = AddQueryParams(url, queryParams)
+		url = http.AddQueryParams(url, queryParams)
 	}
 
 	var response types.HotSearchResponse
@@ -57,12 +58,6 @@ func (a *API) GetHotSearch(params *types.HotSearchRequest) (*types.HotSearchResp
 	}
 
 	if response.Code != 0 {
-		a.log.Error("获取热搜失败",
-			logger.F("url", url),
-			logger.F("code", response.Code),
-			logger.F("message", response.Message),
-			logger.F("body", response),
-		)
 		return nil, fmt.Errorf("获取热搜失败: %s", response.Message)
 	}
 
@@ -82,18 +77,12 @@ func (a *API) Search(params *types.SearchRequest) (*types.SearchResponse, error)
 		queryParams["token"] = a.token
 	}
 	if len(queryParams) > 0 {
-		url = AddQueryParams(url, queryParams)
+		url = http.AddQueryParams(url, queryParams)
 	}
 
 	var response types.SearchResponse
 	err := a.client.GetJSON(url, &response)
 	if err != nil {
-		a.log.Error("搜索微博失败",
-			logger.F("url", url),
-			logger.F("code", response.Code),
-			logger.F("message", response.Message),
-			logger.F("body", response),
-		)
 		return nil, fmt.Errorf("搜索微博失败: %s", response.Message)
 	}
 
@@ -114,18 +103,12 @@ func (a *API) GetUserStatus(params *types.UserStatusRequest) (*types.UserStatusR
 		queryParams["token"] = a.token
 	}
 	if len(queryParams) > 0 {
-		url = AddQueryParams(url, queryParams)
+		url = http.AddQueryParams(url, queryParams)
 	}
 
 	var response types.UserStatusResponse
 	err := a.client.GetJSON(url, &response)
 	if err != nil {
-		a.log.Error("获取用户微博失败",
-			logger.F("url", url),
-			logger.F("code", response.Code),
-			logger.F("message", response.Message),
-			logger.F("body", response),
-		)
 		return nil, fmt.Errorf("获取用户微博失败: %s", response.Message)
 	}
 

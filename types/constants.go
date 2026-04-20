@@ -10,20 +10,10 @@ const (
 	DefaultSearchEndpoint    = "https://open-im.api.weibo.com/open/wis/search_query"
 	DefaultStatusEndpoint    = "https://open-im.api.weibo.com/open/weibo/user_status"
 
-	// PingInterval 心跳间隔
-	PingInterval = 30 * time.Second
-	// PingTimeout 心跳超时时间
-	PingTimeout = 10 * time.Second
-
-	// InitialReconnectDelay 初始重连延迟
-	InitialReconnectDelay = 1 * time.Second
-	// MaxReconnectDelay 最大重连延迟
-	MaxReconnectDelay = 60 * time.Second
-
-	// TokenExpireSeconds token 过期时间（秒）
-	TokenExpireSeconds = 7200
-	// TokenRefreshBufferSeconds token 刷新缓冲时间（秒）
-	TokenRefreshBufferSeconds = 60
+	// TokenExpireDuration token 过期时间（秒）
+	TokenExpireDuration = 7200 * time.Second
+	// TokenRefreshBuffer token 刷新缓冲时间
+	TokenRefreshBuffer = 60 * time.Second
 
 	// TokenFetchBaseDelay token 获取基础延迟
 	TokenFetchBaseDelay = 1 * time.Second
@@ -31,6 +21,20 @@ const (
 	TokenFetchMaxDelay = 8 * time.Second
 	// TokenFetchMaxRetries token 获取最大重试次数
 	TokenFetchMaxRetries = 2
+
+	// TokenRefreshCheckInterval Token 刷新检查间隔
+	TokenRefreshCheckInterval = 30 * time.Second
+	// TokenRefreshThreshold Token 刷新阈值（提前多久刷新）
+	TokenRefreshThreshold = 5 * time.Minute
+
+	// 默认心跳间隔(秒)
+	DefaultHeartbeatInterval = 30 * time.Second
+	// 默认心跳超时次数阈值
+	HeartbeatTimeoutThreshold = 2
+	// 默认最大重连次数
+	DefaultMaxReconnectAttempts = 100
+	// 默认重连延迟
+	DefaultReconnectDelays = "1s,2s,5s,10s,30s,60s"
 )
 
 // 榜单类型映射：中文名称 -> 内部标识
@@ -48,4 +52,23 @@ var CategoryMap = map[string]string{
 var RetryableStatusCodes = map[int]bool{
 	408: true, 425: true, 429: true,
 	500: true, 502: true, 503: true, 504: true,
+}
+
+// ConnectionState 连接状态
+type ConnectionState string
+
+const (
+	ConnectionStateIdle         ConnectionState = "idle"         // 空闲
+	ConnectionStateConnecting   ConnectionState = "connecting"   // 连接中
+	ConnectionStateConnected    ConnectionState = "connected"    // 已连接
+	ConnectionStateBackoff      ConnectionState = "backoff"      // 重试中
+	ConnectionStateReconnecting ConnectionState = "reconnecting" // 重连中
+	ConnectionStateError        ConnectionState = "error"        // 错误
+	ConnectionStateStopped      ConnectionState = "stopped"      // 已停止
+	ConnectionStateDisconnected ConnectionState = "disconnected" // 已断开
+)
+
+// String 连接状态 字符串
+func (c ConnectionState) String() string {
+	return string(c)
 }

@@ -16,16 +16,20 @@ type WsConnectedMsg struct {
 // WsMessageMsg 消息消息
 type WsMessageMsg struct {
 	WsMsg
-	Payload struct {
-		Input      []WsMessageMsgInputItem `json:"input,omitempty"`      // 输入参数
-		FromUserId string                  `json:"fromUserId,omitempty"` // 发送用户ID
-		MessageId  string                  `json:"messageId,omitempty"`  // 消息ID
-		Text       string                  `json:"text,omitempty"`       // 消息内容
-		ToUserId   string                  `json:"toUserId,omitempty"`   // 接收用户ID
-		TimeStamp  int64                   `json:"timeStamp,omitempty"`  // 时间戳
-	} `json:"payload"`
+	Payload WsMessageMsgPayload `json:"payload"`
 }
 
+// WsMessageMsgPayload 消息消息负载
+type WsMessageMsgPayload struct {
+	Input      []WsMessageMsgInputItem `json:"input,omitempty"`      // 输入参数
+	FromUserID string                  `json:"fromUserId,omitempty"` // 发送用户ID
+	MessageID  string                  `json:"messageId,omitempty"`  // 消息ID
+	Text       string                  `json:"text,omitempty"`       // 消息内容
+	ToUserID   string                  `json:"toUserId,omitempty"`   // 接收用户ID
+	TimeStamp  int64                   `json:"timeStamp,omitempty"`  // 时间戳
+}
+
+// WsMessageMsgInputItem 消息消息负载输入项
 type WsMessageMsgInputItem struct {
 	Role    string `json:"role,omitempty"` // 角色
 	Type    string `json:"type,omitempty"` // 类型
@@ -51,19 +55,19 @@ type HeartbeatMsgRequest struct {
 type SendMessageRequest struct {
 	Type    string `json:"type"` // 消息类型
 	Payload struct {
-		ToUserId  string `json:"toUserId,omitempty"`  // 接收用户ID
+		ToUserID  string `json:"toUserId,omitempty"`  // 接收用户ID
 		Text      string `json:"text,omitempty"`      // 消息内容
-		MessageId string `json:"messageId,omitempty"` // 消息ID
-		ChunkId   int    `json:"chunkId,omitempty"`   // 分块ID
+		MessageID string `json:"messageId,omitempty"` // 消息ID
+		ChunkID   int    `json:"chunkId,omitempty"`   // 分块ID
 		Done      bool   `json:"done,omitempty"`      // 是否完成
 	} `json:"payload"`
 }
 
 // SendMessagePayload 发送消息请求负载
 type SendMessagePayload struct {
-	ToUserId  string `json:"toUserId,omitempty"`  // 接收用户ID
+	ToUserID  string `json:"toUserId,omitempty"`  // 接收用户ID
 	Text      string `json:"text,omitempty"`      // 消息内容
-	MessageId string `json:"messageId,omitempty"` // 消息ID
-	ChunkId   int    `json:"chunkId,omitempty"`   // 分块ID
+	MessageID string `json:"messageId,omitempty"` // 消息ID
+	ChunkID   int    `json:"chunkId,omitempty"`   // 分块ID
 	Done      bool   `json:"done,omitempty"`      // 是否完成
 }
