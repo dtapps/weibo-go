@@ -39,10 +39,15 @@ type Plugin struct {
 
 // Runtime 运行时
 type Runtime struct {
-	channel        *ChannelRuntime
-	onMessage      func(msg *types.InboundMessage)
-	onConnected    func()
+	channel *ChannelRuntime
+	// onMessage 消息推送
+	onMessage func(msg *types.InboundMessage)
+	// onConnected 连接成功
+	onConnected func()
+	// onDisconnected 断开连接
 	onDisconnected func()
+	// onError 错误
+	onError func(err error)
 }
 
 // ChannelRuntime 通道运行时
@@ -160,7 +165,7 @@ func (p *Plugin) GetState() string {
 
 // OnReady 连接就绪
 func (p *Plugin) OnReady(data *types.OnReadyData) {
-	p.log.Debug("连接就绪", logger.F("ConnectID", data.ConnectID))
+	p.log.Info("连接就绪", logger.F("ConnectID", data.ConnectID))
 
 	if p.runtime != nil && p.runtime.onConnected != nil {
 		p.runtime.onConnected()
@@ -169,7 +174,7 @@ func (p *Plugin) OnReady(data *types.OnReadyData) {
 
 // OnDispatch 消息推送
 func (p *Plugin) OnDispatch(msg *types.WsMessageMsg) {
-	p.log.Debug("消息推送", logger.F("MessageID", msg.Payload.MessageID))
+	p.log.Info("消息推送", logger.F("MessageID", msg.Payload.MessageID))
 
 	// 转换为 InboundMessage
 	inbound := message.ToInboundMessage(msg)
@@ -206,6 +211,10 @@ func (p *Plugin) OnStateChange(state string) {
 // OnError 错误
 func (p *Plugin) OnError(err error) {
 	p.log.Error("错误", logger.F("error", err.Error()))
+
+	if p.runtime != nil {
+		p.runtime.onError(err)
+	}
 }
 
 // OnClose 关闭
@@ -283,6 +292,14 @@ func (p *Plugin) SetOnDisconnected(fn func()) {
 		p.runtime = &Runtime{}
 	}
 	p.runtime.onDisconnected = fn
+}
+
+// SetOnError 设置错误回调
+func (p *Plugin) SetOnError(fn func(err error)) {
+	if p.runtime == nil {
+		p.runtime = &Runtime{}
+	}
+	p.runtime.onError = fn
 }
 
 // GetMember 获取成员管理

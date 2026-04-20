@@ -1,6 +1,8 @@
 package weibo
 
 import (
+	"fmt"
+
 	"github.com/dtapps/weibo-go/account"
 	"github.com/dtapps/weibo-go/member"
 	"github.com/dtapps/weibo-go/plugin"
@@ -51,6 +53,11 @@ func (c *Client) OnConnected(handler func()) {
 // OnDisconnected 设置断开连接回调
 func (c *Client) OnDisconnected(handler func()) {
 	c.plugin.SetOnDisconnected(handler)
+}
+
+// OnError 设置错误回调
+func (c *Client) OnError(handler func(err error)) {
+	c.plugin.SetOnError(handler)
 }
 
 // SendMessage 发送消息
@@ -117,17 +124,6 @@ func (c *Client) Stop() error {
 }
 
 // 错误定义
-type Error struct {
-	Code    int
-	Message string
-}
-
-func (e *Error) Error() string {
-	return e.Message
-}
-
 var (
-	ErrAccountNotConfigured = &Error{Code: 1, Message: "账号未配置"}
-	ErrNotConnected         = &Error{Code: 2, Message: "未连接到服务器"}
-	ErrSendFailed           = &Error{Code: 3, Message: "发送消息失败"}
+	ErrAccountNotConfigured = fmt.Errorf("账号未配置")
 )

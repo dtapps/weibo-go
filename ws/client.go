@@ -18,12 +18,19 @@ import (
 
 // WsClientCallback WebSocket客户端回调接口
 type WsClientCallback interface {
+	// OnReady 连接就绪
 	OnReady(data *types.OnReadyData)
-	OnDispatch(pushEvent *types.WsMessageMsg)
+	// OnDispatch 消息推送
+	OnDispatch(msg *types.WsMessageMsg)
+	// OnStateChange 状态变化
 	OnStateChange(state string)
+	// OnError 错误
 	OnError(err error)
+	// OnClose 关闭
 	OnClose(code int, reason string)
+	// OnKickout 被踢
 	OnKickout(code int, reason string)
+	// OnAuthFailed 认证失败
 	OnAuthFailed(code int) (*types.WsAuthData, error)
 }
 
@@ -259,6 +266,8 @@ func (c *WsClient) ScheduleReconnect() {
 func (c *WsClient) close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	c.log.Warn("正在关闭连接")
 
 	if c.conn != nil {
 		if err := c.conn.Close(); err != nil {
