@@ -25,7 +25,7 @@ AppSecret: your-app-secret
 
 如需重置凭证，发送 `重置凭证`
 
-## 使用 Demo
+## 使用示例
 
 ```go
 package main
@@ -46,7 +46,7 @@ func main() {
 	logger.SetLevel(logger.LevelDebug)
 	l := logger.GetLogger("demo")
 
-	// 创建配置
+	// 获取默认配置
 	defaultCfg := config.DefaultConfig()
 	defaultCfg.AppID = "your-app-id"
 	defaultCfg.AppSecret = "your-app-secret"
