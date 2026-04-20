@@ -32,13 +32,16 @@ func (c *WsClient) SendMessage(toUserID string, text string, messageID string, c
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return fmt.Errorf("发送消息失败: %w", err)
+		return fmt.Errorf("构建消息失败: %w", err)
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		return fmt.Errorf("发送消息失败: %w", err)
 	}
 
-	c.log.Debug("发送消息成功", logger.F("data", string(data)))
+	c.log.Debug("发送消息成功",
+		logger.F("messageID", messageID),
+		logger.F("data", string(data)),
+	)
 
 	return nil
 }
