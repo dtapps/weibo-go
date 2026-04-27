@@ -70,7 +70,7 @@ func (c *WsClient) sendHeartbeatMessage() {
 		return
 	}
 
-	c.log.Info("发送心跳消息成功", logger.F("data", string(data)))
+	c.log.Debug("发送心跳消息成功", logger.F("data", string(data)))
 
 	c.mu.Lock()
 	c.heartbeatTimer = time.AfterFunc(c.heartbeatInterval, func() {
