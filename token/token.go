@@ -66,6 +66,7 @@ func (m *Manager) SetCallback(callback types.TokenCallback) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.callback = callback
+	m.log.Warn("设置 Token 回调")
 }
 
 // GetCallback 获取 Token 回调
@@ -151,6 +152,11 @@ func (m *Manager) FetchToken(appID string, appSecret string, tokenEndpoint strin
 		tokenEndpoint = types.DefaultTokenEndpoint
 	}
 
+	m.log.Warn("请求 Token 获取",
+		logger.F("appID", appID),
+		logger.F("tokenEndpoint", tokenEndpoint),
+	)
+
 	var lastErr error
 
 	for attempt := 0; attempt <= types.TokenFetchMaxRetries; attempt++ {
@@ -235,6 +241,7 @@ func (m *Manager) callCallback(data *types.TokenCallbackData) {
 	callback := m.callback
 	m.mu.RUnlock()
 
+	m.log.Warn("调用 Token 回调", logger.F("data", data))
 	if callback != nil {
 		go callback(data)
 	}
