@@ -10,8 +10,16 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// SendMessage 发送消息
+// SendMessage 发送消息（通过有序队列，保证 FIFO 顺序）
 func (c *WsClient) SendMessage(toUserID string, text string, messageID string, chunkID int, done bool) error {
+	// 通过有序队列提交发送任务
+	return c.SendQueued(func() error {
+		return c.sendMessageRaw(toUserID, text, messageID, chunkID, done)
+	})
+}
+
+// sendMessageRaw 实际执行 WebSocket 写入（由 senderLoop 串行调用）
+func (c *WsClient) sendMessageRaw(toUserID string, text string, messageID string, chunkID int, done bool) error {
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()

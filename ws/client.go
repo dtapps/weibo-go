@@ -55,6 +55,13 @@ type WsClient struct {
 	auth      *types.WsAuthData
 	accountID string
 
+	// === 有序发送队列 ===
+	// 所有业务消息通过此队列串行发送，
+	// 保证无论调用方如何并发，消息都按入队顺序发出。
+	sendQueue  chan sendTask // 任务队列（有缓冲）
+	sendOnce   sync.Once     // 确保 sender 只启动一次（懒加载）
+	senderDone chan struct{} // 用于通知 sender 退出
+
 	// 心跳相关
 	heartbeatInterval     time.Duration // 心跳间隔(秒)
 	heartbeatTimer        *time.Timer   // 心跳定时器
@@ -97,6 +104,8 @@ func NewWsClient(url string, accountID string, callback WsClientCallback) *WsCli
 		log:                  logger.New("ws"),
 		ctx:                  ctx,
 		cancel:               cancel,
+		sendQueue:            make(chan sendTask, 256), // 有缓冲队列，调用方可快速入队
+		senderDone:           make(chan struct{}),
 	}
 }
 
@@ -268,6 +277,14 @@ func (c *WsClient) close() {
 	defer c.mu.Unlock()
 
 	c.log.Warn("正在关闭连接")
+
+	// 停止有序发送队列的 sender 协程
+	select {
+	case <-c.senderDone:
+		// 已经停止
+	default:
+		close(c.senderDone)
+	}
 
 	if c.conn != nil {
 		if err := c.conn.Close(); err != nil {

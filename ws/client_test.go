@@ -49,8 +49,12 @@ var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { retu
 // 验证在频繁获取状态和断开连接时，是否会发生竞态或死锁
 func TestWsClient_ConcurrentStateAccess(t *testing.T) {
 	cb := &mockCallback{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		conn, _ := upgrader.Upgrade(w, nil, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = recover() }() // 防止 server 关闭时 Upgrade panic
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
 		_ = conn.Close()
 	}))
 	defer server.Close()
@@ -88,12 +92,17 @@ func TestWsClient_ReconnectLogic(t *testing.T) {
 	var connCount int
 	var mu sync.Mutex
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = recover() }() // 防止 server 关闭时 Upgrade panic
+
 		mu.Lock()
 		connCount++
 		mu.Unlock()
 
-		conn, _ := upgrader.Upgrade(w, nil, nil)
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
 		// 模拟服务器立即断开
 		_ = conn.Close()
 	}))
@@ -121,8 +130,13 @@ func TestWsClient_ReconnectLogic(t *testing.T) {
 // TestWsClient_HeartbeatSafety 测试心跳在连接断开时的安全性
 func TestWsClient_HeartbeatSafety(t *testing.T) {
 	cb := &mockCallback{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		conn, _ := upgrader.Upgrade(w, nil, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = recover() }() // 防止 server 关闭时 Upgrade panic
+
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
 		time.Sleep(50 * time.Millisecond)
 		_ = conn.Close()
 	}))
