@@ -17,6 +17,9 @@ func (c *WsClient) handleClose(code int, reason string) {
 
 	c.mu.Lock()
 	wasConnected := c.state == types.ConnectionStateConnected.String()
+	isManualDisconnect := c.manualDisconnect
+	// 重置手动断开标志
+	c.manualDisconnect = false
 	c.mu.Unlock()
 
 	c.stopHeartbeat()
@@ -31,13 +34,19 @@ func (c *WsClient) handleClose(code int, reason string) {
 		c.callback.OnClose(code, reason)
 	}
 
-	if wasConnected || code != 1000 {
-		c.ScheduleReconnect()
+	// 安排重连
+	// 优先判断：手动断开不需要重连
+	if isManualDisconnect {
+		return
 	}
 
-	// 安排重连
-	// code=1008 reason=Invalid or expired token
-	if wasConnected || code != 1008 {
+	// 正常关闭 (code=1000) 不需要重连
+	if code == 1000 {
+		return
+	}
+
+	// 如果之前已连接或者是异常关闭，安排重连
+	if wasConnected || code != 1000 {
 		c.ScheduleReconnect()
 	}
 }
